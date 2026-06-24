@@ -110,6 +110,32 @@ async function run() {
             res.send(result);
         });
 
+
+        // featured properties 
+
+        app.get('/api/properties/featured', async (req, res) => {
+            try {
+                const properties = await propertiesCollection
+                    .find({ status: 'approved' })
+                    .limit(6)
+                    .sort({ createdAt: -1 })
+                    .toArray();
+
+                res.json({
+                    success: true,
+                    properties: properties,
+                    count: properties.length
+                });
+            } catch (error) {
+                console.error('Error fetching featured properties:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch featured properties'
+                });
+            }
+        });
+
+
         app.get("/api/properties/user/:id", async (req, res) => {
             try {
                 const userId = req.params.id;
