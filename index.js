@@ -51,6 +51,29 @@ async function run() {
             res.send(result);
         });
 
+
+        app.get("/api/properties/user/:id", async (req, res) => {
+            try {
+                const userId = req.params.id;
+
+                const properties = await propertiesCollection
+                    .find({
+                        "owner.id": userId,
+                    })
+                    .toArray();
+
+                res.send(properties);
+            } catch (error) {
+                console.error(error);
+
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to fetch user properties",
+                });
+            }
+        });
+
+
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
