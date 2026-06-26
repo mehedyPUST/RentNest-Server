@@ -10,7 +10,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ✅ CORS
 app.use(cors({
-    origin: process.env.BETTER_AUTH_URL,
+    origin: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
     credentials: true,
 }))
 app.use(express.json())
@@ -1694,87 +1694,16 @@ async function run() {
         });
 
         // ============================================================
-        // ==================== STRIPE CHECKOUT SESSION ================
-        // ============================================================
-
-        // ✅ POST - Create Stripe Checkout Session (For Frontend Stripe)
-        app.post('/api/create-checkout-session', async (req, res) => {
-            try {
-                const { propertyId, propertyTitle, propertyPrice, bookingId } = req.body;
-
-                console.log('📤 Creating Stripe session:', { propertyId, propertyTitle, propertyPrice, bookingId });
-
-                if (!propertyId || !propertyTitle || !propertyPrice || !bookingId) {
-                    return res.status(400).json({
-                        success: false,
-                        message: 'Missing required fields'
-                    });
-                }
-
-                // ✅ Create Stripe Checkout Session
-                const session = await stripe.checkout.sessions.create({
-                    payment_method_types: ['card'],
-                    line_items: [
-                        {
-                            price_data: {
-                                currency: 'usd',
-                                product_data: {
-                                    name: propertyTitle,
-                                    description: `Booking payment for ${propertyTitle}`,
-                                    metadata: {
-                                        propertyId: propertyId,
-                                        bookingId: bookingId
-                                    }
-                                },
-                                unit_amount: Math.round(Number(propertyPrice) * 100)
-                            },
-                            quantity: 1
-                        }
-                    ],
-                    mode: 'payment',
-                    success_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
-                    cancel_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/cancelled?bookingId=${bookingId}`,
-                    metadata: {
-                        propertyId: propertyId,
-                        bookingId: bookingId,
-                        amount: String(propertyPrice)
-                    }
-                });
-
-                console.log('✅ Stripe session created:', session.id);
-
-                res.json({
-                    success: true,
-                    sessionId: session.id,
-                    url: session.url
-                });
-
-            } catch (error) {
-                console.error('❌ Stripe error:', error);
-                res.status(500).json({
-                    success: false,
-                    message: error.message || 'Failed to create payment session'
-                });
-            }
-        });
-
-
-        // ============================================================
         // ==================== REVIEWS APIS ===========================
         // ============================================================
 
-        // ✅ POST - Create a review (শুধু booked tenant)
-        // server.js - POST /api/reviews
-
-        // server.js - POST /api/reviews
-
+        // ✅ POST - Create a review
         app.post('/api/reviews', async (req, res) => {
             try {
                 const { propertyId, tenantId, tenantName, tenantEmail, rating, comment } = req.body;
 
                 console.log('📥 Review Request:', { propertyId, tenantId, rating, comment });
 
-                // Validation
                 if (!propertyId || !tenantId || !rating || !comment) {
                     return res.status(400).json({
                         success: false,
@@ -1826,13 +1755,12 @@ async function run() {
                     _id: new ObjectId(tenantId)
                 });
 
-                // ✅ Create review object
                 const review = {
                     propertyId: propertyId,
                     tenantId: tenantId,
                     tenantName: tenantName || user?.name || 'Anonymous',
                     tenantEmail: tenantEmail || user?.email || '',
-                    tenantPhoto: user?.image || user?.photo || null,  // ✅ user collection থেকে image নিন
+                    tenantPhoto: user?.image || user?.photo || null,
                     rating: parseInt(rating),
                     comment: comment,
                     propertyTitle: property?.title || 'Property',
@@ -1863,6 +1791,7 @@ async function run() {
                 });
             }
         });
+
         // ✅ GET - All reviews for a property
         app.get('/api/reviews/:propertyId', async (req, res) => {
             try {
@@ -1875,7 +1804,6 @@ async function run() {
                     .limit(parseInt(limit))
                     .toArray();
 
-                // Calculate average rating
                 const totalReviews = reviews.length;
                 const averageRating = totalReviews > 0
                     ? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
@@ -1898,7 +1826,7 @@ async function run() {
             }
         });
 
-        // ✅ GET - All reviews (for Home Page - only 4)
+        // ✅ GET - All reviews (for Home Page)
         app.get('/api/reviews', async (req, res) => {
             try {
                 const { limit = 4 } = req.query;
@@ -1925,12 +1853,11 @@ async function run() {
             }
         });
 
-        // ✅ GET - Check if user can review a property
+        // ✅ GET - Check if user can review
         app.get('/api/reviews/check/:propertyId/:tenantId', async (req, res) => {
             try {
                 const { propertyId, tenantId } = req.params;
 
-                // Check if user booked this property
                 const booking = await bookingsCollection.findOne({
                     propertyId: propertyId,
                     tenantId: tenantId,
@@ -1945,7 +1872,6 @@ async function run() {
                     });
                 }
 
-                // Check if already reviewed
                 const existingReview = await reviewsCollection.findOne({
                     propertyId: propertyId,
                     tenantId: tenantId
@@ -1968,14 +1894,75 @@ async function run() {
             }
         });
 
+        // ============================================================
+        // ==================== STRIPE CHECKOUT SESSION ================
+        // ============================================================
 
+        // ✅ POST - Create Stripe Checkout Session
+        app.post('/api/create-checkout-session', async (req, res) => {
+            try {
+                const { propertyId, propertyTitle, propertyPrice, bookingId } = req.body;
 
+                console.log('📤 Creating Stripe session:', { propertyId, propertyTitle, propertyPrice, bookingId });
+
+                if (!propertyId || !propertyTitle || !propertyPrice || !bookingId) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Missing required fields'
+                    });
+                }
+
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: 'usd',
+                                product_data: {
+                                    name: propertyTitle,
+                                    description: `Booking payment for ${propertyTitle}`,
+                                    metadata: {
+                                        propertyId: propertyId,
+                                        bookingId: bookingId
+                                    }
+                                },
+                                unit_amount: Math.round(Number(propertyPrice) * 100)
+                            },
+                            quantity: 1
+                        }
+                    ],
+                    mode: 'payment',
+                    success_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
+                    cancel_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/cancelled?bookingId=${bookingId}`,
+                    metadata: {
+                        propertyId: propertyId,
+                        bookingId: bookingId,
+                        amount: String(propertyPrice)
+                    }
+                });
+
+                console.log('✅ Stripe session created:', session.id);
+
+                res.json({
+                    success: true,
+                    sessionId: session.id,
+                    url: session.url
+                });
+
+            } catch (error) {
+                console.error('❌ Stripe error:', error);
+                res.status(500).json({
+                    success: false,
+                    message: error.message || 'Failed to create payment session'
+                });
+            }
+        });
 
         // ============================================================
         // ==================== DASHBOARD STATS ========================
         // ============================================================
 
-        // ✅ GET - Admin dashboard stats
+        // ✅ GET - Admin dashboard stats (আপডেটেড - Revenue সহ)
         app.get('/api/admin/stats', async (req, res) => {
             try {
                 const totalUsers = await usersCollection.countDocuments();
@@ -1984,6 +1971,70 @@ async function run() {
                 const totalBookings = await bookingsCollection.countDocuments();
                 const confirmedBookings = await bookingsCollection.countDocuments({ bookingStatus: 'confirmed' });
 
+                // ✅ Calculate total revenue from paid bookings
+                const revenueResult = await bookingsCollection.aggregate([
+                    {
+                        $match: {
+                            paymentStatus: 'paid',
+                            paymentDate: { $exists: true }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            totalRevenue: { $sum: '$propertyInfo.price' }
+                        }
+                    }
+                ]).toArray();
+
+                const totalRevenue = revenueResult[0]?.totalRevenue || 0;
+
+                // ✅ Calculate monthly growth
+                const now = new Date();
+                const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+
+                const currentMonthRevenue = await bookingsCollection.aggregate([
+                    {
+                        $match: {
+                            paymentStatus: 'paid',
+                            paymentDate: { $gte: currentMonthStart, $lte: now }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            total: { $sum: '$propertyInfo.price' }
+                        }
+                    }
+                ]).toArray();
+
+                const lastMonthRevenue = await bookingsCollection.aggregate([
+                    {
+                        $match: {
+                            paymentStatus: 'paid',
+                            paymentDate: { $gte: lastMonthStart, $lte: lastMonthEnd }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: null,
+                            total: { $sum: '$propertyInfo.price' }
+                        }
+                    }
+                ]).toArray();
+
+                const currentMonth = currentMonthRevenue[0]?.total || 0;
+                const lastMonth = lastMonthRevenue[0]?.total || 0;
+
+                let monthlyGrowth = 0;
+                if (lastMonth > 0) {
+                    monthlyGrowth = Math.round(((currentMonth - lastMonth) / lastMonth) * 100);
+                } else if (currentMonth > 0) {
+                    monthlyGrowth = 100;
+                }
+
                 res.json({
                     success: true,
                     stats: {
@@ -1991,7 +2042,9 @@ async function run() {
                         totalProperties,
                         pendingProperties,
                         totalBookings,
-                        confirmedBookings
+                        confirmedBookings,
+                        totalRevenue,      // ✅ এখন revenue আসবে
+                        monthlyGrowth      // ✅ monthly growth
                     }
                 });
 
@@ -2004,15 +2057,11 @@ async function run() {
             }
         });
 
-        // ✅ GET - Owner dashboard stats
-        // server.js - Owner Dashboard Stats (আপডেটেড)
-
         // ✅ GET - Owner dashboard stats with monthly earnings
         app.get('/api/owner/stats/:ownerId', async (req, res) => {
             try {
                 const { ownerId } = req.params;
 
-                // Total Properties
                 const totalProperties = await propertiesCollection.countDocuments({
                     $or: [
                         { 'ownerId': ownerId },
@@ -2020,28 +2069,28 @@ async function run() {
                     ]
                 });
 
-                // Total Bookings
                 const totalBookings = await bookingsCollection.countDocuments({
                     ownerId: ownerId
                 });
 
-                // Confirmed Bookings
                 const confirmedBookings = await bookingsCollection.countDocuments({
                     ownerId: ownerId,
                     bookingStatus: 'confirmed'
                 });
 
-                // ✅ Monthly Earnings (Last 12 months)
                 const monthlyEarnings = await getMonthlyEarnings(ownerId);
-
-                // Total Earnings
                 const totalEarnings = monthlyEarnings.reduce((sum, item) => sum + item.earnings, 0);
-
-                // Pending Bookings
                 const pendingBookings = await bookingsCollection.countDocuments({
                     ownerId: ownerId,
                     bookingStatus: 'pending'
                 });
+
+                // ✅ Recent bookings
+                const recentBookings = await bookingsCollection
+                    .find({ ownerId: ownerId })
+                    .sort({ createdAt: -1 })
+                    .limit(5)
+                    .toArray();
 
                 res.json({
                     success: true,
@@ -2051,7 +2100,8 @@ async function run() {
                         confirmedBookings,
                         pendingBookings,
                         totalEarnings,
-                        monthlyEarnings // ✅ monthly earnings data
+                        monthlyEarnings,
+                        recentBookings
                     }
                 });
 
@@ -2065,13 +2115,10 @@ async function run() {
         });
 
         // ✅ Helper function - Get monthly earnings
-        // server.js - getMonthlyEarnings ফাংশন আপডেট করুন
-
         async function getMonthlyEarnings(ownerId) {
             const months = [];
             const now = new Date();
 
-            // Get last 12 months
             for (let i = 11; i >= 0; i--) {
                 const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
                 const monthName = date.toLocaleString('default', { month: 'short' });
@@ -2085,17 +2132,13 @@ async function run() {
                 });
             }
 
-            // ✅ আপডেট: 'confirmed' + 'approved' + 'pending' (paymentStatus: 'paid')
             const bookings = await bookingsCollection.find({
                 ownerId: ownerId,
-                bookingStatus: { $in: ['confirmed', 'approved', 'pending'] }, // ✅ সব status
-                paymentStatus: 'paid', // ✅ paid
+                bookingStatus: { $in: ['confirmed', 'approved', 'pending'] },
+                paymentStatus: 'paid',
                 paymentDate: { $exists: true }
             }).toArray();
 
-            console.log('📊 Found bookings for earnings:', bookings.length);
-
-            // Calculate earnings per month
             bookings.forEach(booking => {
                 if (!booking.paymentDate) return;
 
@@ -2110,9 +2153,9 @@ async function run() {
                 });
             });
 
-            console.log('📊 Monthly earnings:', months);
             return months;
         }
+
         // ============================================================
         // ==================== TRANSACTIONS APIS ======================
         // ============================================================
@@ -2125,15 +2168,12 @@ async function run() {
                 const skip = (parseInt(page) - 1) * parseInt(limit);
                 const limitNum = parseInt(limit);
 
-                // Build query
                 let query = {};
 
-                // ✅ Status filter - 'all' হলে filter করবেন না
                 if (status && status !== 'all' && status !== 'undefined') {
-                    query.status = status;
+                    query.paymentStatus = status;
                 }
 
-                // Search filter
                 if (search) {
                     query.$or = [
                         { 'propertyInfo.title': { $regex: search, $options: 'i' } },
@@ -2143,7 +2183,6 @@ async function run() {
                     ];
                 }
 
-                // Get transactions from bookings collection (where paymentStatus = 'paid')
                 const transactions = await bookingsCollection
                     .find({
                         ...query,
@@ -2154,36 +2193,58 @@ async function run() {
                     .limit(limitNum)
                     .toArray();
 
-                // Count total
                 const totalCount = await bookingsCollection.countDocuments({
                     ...query,
                     paymentStatus: 'paid'
                 });
 
-                // Format transactions
-                const formattedTransactions = transactions.map(booking => ({
-                    _id: booking._id,
-                    transactionId: booking._id,
-                    propertyInfo: booking.propertyInfo || {
-                        title: 'N/A',
-                        location: 'N/A',
-                        price: 0
-                    },
-                    tenantInfo: booking.tenantInfo || {
-                        name: 'Unknown',
-                        email: 'N/A',
-                        phone: 'N/A'
-                    },
-                    amount: booking.propertyInfo?.price || 0,
-                    status: booking.paymentStatus || 'paid',
-                    paymentType: 'booking',
-                    paymentMethod: 'stripe',
-                    paymentSessionId: booking.paymentSessionId || null,
-                    paymentDate: booking.paymentDate || booking.createdAt,
-                    createdAt: booking.createdAt,
-                    updatedAt: booking.updatedAt,
-                    additionalNotes: booking.additionalNotes || null,
-                    bookingStatus: booking.bookingStatus || 'pending'
+                const formattedTransactions = await Promise.all(transactions.map(async (booking) => {
+                    let ownerName = 'N/A';
+
+                    if (booking.ownerName) {
+                        ownerName = booking.ownerName;
+                    } else if (booking.ownerId) {
+                        try {
+                            const owner = await usersCollection.findOne({
+                                _id: new ObjectId(booking.ownerId)
+                            });
+                            if (owner) {
+                                ownerName = owner.name || 'N/A';
+                            }
+                        } catch (err) {
+                            console.error('Error fetching owner:', err);
+                        }
+                    }
+
+                    return {
+                        _id: booking._id,
+                        transactionId: booking._id,
+                        propertyInfo: booking.propertyInfo || {
+                            title: 'N/A',
+                            location: 'N/A',
+                            price: 0
+                        },
+                        tenantInfo: booking.tenantInfo || {
+                            name: 'Unknown',
+                            email: 'N/A',
+                            phone: 'N/A'
+                        },
+                        ownerInfo: {
+                            name: ownerName,
+                            id: booking.ownerId || 'N/A'
+                        },
+                        ownerName: ownerName,
+                        amount: booking.propertyInfo?.price || 0,
+                        status: booking.paymentStatus || 'paid',
+                        paymentType: 'booking',
+                        paymentMethod: 'stripe',
+                        paymentSessionId: booking.paymentSessionId || null,
+                        paymentDate: booking.paymentDate || booking.createdAt,
+                        createdAt: booking.createdAt,
+                        updatedAt: booking.updatedAt,
+                        additionalNotes: booking.additionalNotes || null,
+                        bookingStatus: booking.bookingStatus || 'pending'
+                    };
                 }));
 
                 res.json({
@@ -2229,7 +2290,6 @@ async function run() {
                     });
                 }
 
-                // Format transaction
                 const transaction = {
                     _id: booking._id,
                     transactionId: booking._id,
@@ -2273,29 +2333,24 @@ async function run() {
         // ✅ GET - Transaction stats (Admin only)
         app.get('/api/admin/transactions/stats', async (req, res) => {
             try {
-                // Total transactions
                 const totalTransactions = await bookingsCollection.countDocuments({
                     paymentStatus: 'paid'
                 });
 
-                // Total revenue
                 const revenueResult = await bookingsCollection.aggregate([
                     { $match: { paymentStatus: 'paid' } },
                     { $group: { _id: null, total: { $sum: '$propertyInfo.price' } } }
                 ]).toArray();
                 const totalRevenue = revenueResult[0]?.total || 0;
 
-                // Successful transactions (already paid)
                 const successful = await bookingsCollection.countDocuments({
                     paymentStatus: 'paid'
                 });
 
-                // Pending transactions (bookings with pending payment)
                 const pending = await bookingsCollection.countDocuments({
                     paymentStatus: 'pending'
                 });
 
-                // Failed transactions (if any)
                 const failed = await bookingsCollection.countDocuments({
                     paymentStatus: 'failed'
                 });
