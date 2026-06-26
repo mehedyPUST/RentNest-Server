@@ -21,7 +21,7 @@ const uri = process.env.MONGODB_URI
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
-        strict: true,
+        strict: false,
         deprecationErrors: true,
     }
 });
