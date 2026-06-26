@@ -38,6 +38,7 @@ async function run() {
         const usersCollection = database.collection('user');
         const favoritesCollection = database.collection('favorites')
         const bookingsCollection = database.collection('bookings')
+        const reviewsCollection = database.collection('reviews')
 
         // ============================================================
         // ==================== USER APIS ==============================
@@ -1757,6 +1758,219 @@ async function run() {
             }
         });
 
+
+        // ============================================================
+        // ==================== REVIEWS APIS ===========================
+        // ============================================================
+
+        // ✅ POST - Create a review (শুধু booked tenant)
+        // server.js - POST /api/reviews
+
+        // server.js - POST /api/reviews
+
+        app.post('/api/reviews', async (req, res) => {
+            try {
+                const { propertyId, tenantId, tenantName, tenantEmail, rating, comment } = req.body;
+
+                console.log('📥 Review Request:', { propertyId, tenantId, rating, comment });
+
+                // Validation
+                if (!propertyId || !tenantId || !rating || !comment) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Property ID, Tenant ID, rating and comment are required'
+                    });
+                }
+
+                if (rating < 1 || rating > 5) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Rating must be between 1 and 5'
+                    });
+                }
+
+                // ✅ Check if user has booked this property
+                const booking = await bookingsCollection.findOne({
+                    propertyId: propertyId,
+                    tenantId: tenantId,
+                    bookingStatus: { $in: ['confirmed', 'approved', 'completed'] }
+                });
+
+                if (!booking) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'You can only review properties you have booked'
+                    });
+                }
+
+                // ✅ Check if user already reviewed this property
+                const existingReview = await reviewsCollection.findOne({
+                    propertyId: propertyId,
+                    tenantId: tenantId
+                });
+
+                if (existingReview) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'You have already reviewed this property'
+                    });
+                }
+
+                // ✅ Get property details
+                const property = await propertiesCollection.findOne({
+                    _id: new ObjectId(propertyId)
+                });
+
+                // ✅ Get user details (for photo)
+                const user = await usersCollection.findOne({
+                    _id: new ObjectId(tenantId)
+                });
+
+                // ✅ Create review object
+                const review = {
+                    propertyId: propertyId,
+                    tenantId: tenantId,
+                    tenantName: tenantName || user?.name || 'Anonymous',
+                    tenantEmail: tenantEmail || user?.email || '',
+                    tenantPhoto: user?.image || user?.photo || null,  // ✅ user collection থেকে image নিন
+                    rating: parseInt(rating),
+                    comment: comment,
+                    propertyTitle: property?.title || 'Property',
+                    propertyImage: property?.images?.[0] || null,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                };
+
+                const result = await reviewsCollection.insertOne(review);
+
+                console.log('✅ Review created:', result.insertedId);
+
+                res.status(201).json({
+                    success: true,
+                    message: 'Review added successfully',
+                    review: {
+                        ...review,
+                        _id: result.insertedId
+                    }
+                });
+
+            } catch (error) {
+                console.error('❌ Error creating review:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to create review',
+                    error: error.message
+                });
+            }
+        });
+        // ✅ GET - All reviews for a property
+        app.get('/api/reviews/:propertyId', async (req, res) => {
+            try {
+                const { propertyId } = req.params;
+                const { limit = 10 } = req.query;
+
+                const reviews = await reviewsCollection
+                    .find({ propertyId: propertyId })
+                    .sort({ createdAt: -1 })
+                    .limit(parseInt(limit))
+                    .toArray();
+
+                // Calculate average rating
+                const totalReviews = reviews.length;
+                const averageRating = totalReviews > 0
+                    ? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+                    : 0;
+
+                res.json({
+                    success: true,
+                    reviews: reviews,
+                    totalReviews: totalReviews,
+                    averageRating: averageRating.toFixed(1)
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching reviews:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch reviews',
+                    error: error.message
+                });
+            }
+        });
+
+        // ✅ GET - All reviews (for Home Page - only 4)
+        app.get('/api/reviews', async (req, res) => {
+            try {
+                const { limit = 4 } = req.query;
+
+                const reviews = await reviewsCollection
+                    .find({})
+                    .sort({ createdAt: -1 })
+                    .limit(parseInt(limit))
+                    .toArray();
+
+                res.json({
+                    success: true,
+                    reviews: reviews,
+                    count: reviews.length
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching all reviews:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch reviews',
+                    error: error.message
+                });
+            }
+        });
+
+        // ✅ GET - Check if user can review a property
+        app.get('/api/reviews/check/:propertyId/:tenantId', async (req, res) => {
+            try {
+                const { propertyId, tenantId } = req.params;
+
+                // Check if user booked this property
+                const booking = await bookingsCollection.findOne({
+                    propertyId: propertyId,
+                    tenantId: tenantId,
+                    bookingStatus: { $in: ['confirmed', 'approved', 'completed'] }
+                });
+
+                if (!booking) {
+                    return res.json({
+                        success: true,
+                        canReview: false,
+                        message: 'You need to book this property first'
+                    });
+                }
+
+                // Check if already reviewed
+                const existingReview = await reviewsCollection.findOne({
+                    propertyId: propertyId,
+                    tenantId: tenantId
+                });
+
+                res.json({
+                    success: true,
+                    canReview: !existingReview,
+                    alreadyReviewed: !!existingReview,
+                    message: existingReview ? 'You already reviewed this property' : 'You can review this property'
+                });
+
+            } catch (error) {
+                console.error('❌ Error checking review:', error);
+                res.json({
+                    success: false,
+                    canReview: false,
+                    message: 'Error checking review status'
+                });
+            }
+        });
+
+
+
+
         // ============================================================
         // ==================== DASHBOARD STATS ========================
         // ============================================================
@@ -1791,10 +2005,14 @@ async function run() {
         });
 
         // ✅ GET - Owner dashboard stats
+        // server.js - Owner Dashboard Stats (আপডেটেড)
+
+        // ✅ GET - Owner dashboard stats with monthly earnings
         app.get('/api/owner/stats/:ownerId', async (req, res) => {
             try {
                 const { ownerId } = req.params;
 
+                // Total Properties
                 const totalProperties = await propertiesCollection.countDocuments({
                     $or: [
                         { 'ownerId': ownerId },
@@ -1802,18 +2020,27 @@ async function run() {
                     ]
                 });
 
+                // Total Bookings
                 const totalBookings = await bookingsCollection.countDocuments({
                     ownerId: ownerId
                 });
 
-                const pendingBookings = await bookingsCollection.countDocuments({
-                    ownerId: ownerId,
-                    bookingStatus: 'pending'
-                });
-
+                // Confirmed Bookings
                 const confirmedBookings = await bookingsCollection.countDocuments({
                     ownerId: ownerId,
                     bookingStatus: 'confirmed'
+                });
+
+                // ✅ Monthly Earnings (Last 12 months)
+                const monthlyEarnings = await getMonthlyEarnings(ownerId);
+
+                // Total Earnings
+                const totalEarnings = monthlyEarnings.reduce((sum, item) => sum + item.earnings, 0);
+
+                // Pending Bookings
+                const pendingBookings = await bookingsCollection.countDocuments({
+                    ownerId: ownerId,
+                    bookingStatus: 'pending'
                 });
 
                 res.json({
@@ -1821,8 +2048,10 @@ async function run() {
                     stats: {
                         totalProperties,
                         totalBookings,
+                        confirmedBookings,
                         pendingBookings,
-                        confirmedBookings
+                        totalEarnings,
+                        monthlyEarnings // ✅ monthly earnings data
                     }
                 });
 
@@ -1835,6 +2064,55 @@ async function run() {
             }
         });
 
+        // ✅ Helper function - Get monthly earnings
+        // server.js - getMonthlyEarnings ফাংশন আপডেট করুন
+
+        async function getMonthlyEarnings(ownerId) {
+            const months = [];
+            const now = new Date();
+
+            // Get last 12 months
+            for (let i = 11; i >= 0; i--) {
+                const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const monthName = date.toLocaleString('default', { month: 'short' });
+                const year = date.getFullYear();
+                months.push({
+                    month: monthName,
+                    year: year,
+                    startDate: new Date(date.getFullYear(), date.getMonth(), 1),
+                    endDate: new Date(date.getFullYear(), date.getMonth() + 1, 0),
+                    earnings: 0
+                });
+            }
+
+            // ✅ আপডেট: 'confirmed' + 'approved' + 'pending' (paymentStatus: 'paid')
+            const bookings = await bookingsCollection.find({
+                ownerId: ownerId,
+                bookingStatus: { $in: ['confirmed', 'approved', 'pending'] }, // ✅ সব status
+                paymentStatus: 'paid', // ✅ paid
+                paymentDate: { $exists: true }
+            }).toArray();
+
+            console.log('📊 Found bookings for earnings:', bookings.length);
+
+            // Calculate earnings per month
+            bookings.forEach(booking => {
+                if (!booking.paymentDate) return;
+
+                const paymentDate = new Date(booking.paymentDate);
+                const monthKey = paymentDate.toLocaleString('default', { month: 'short' });
+                const yearKey = paymentDate.getFullYear();
+
+                months.forEach(month => {
+                    if (month.month === monthKey && month.year === yearKey) {
+                        month.earnings += booking.propertyInfo?.price || 0;
+                    }
+                });
+            });
+
+            console.log('📊 Monthly earnings:', months);
+            return months;
+        }
         // ============================================================
         // ==================== TRANSACTIONS APIS ======================
         // ============================================================
