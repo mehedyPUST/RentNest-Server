@@ -10,7 +10,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ✅ CORS
 app.use(cors({
-    origin: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+    origin: process.env.BETTER_AUTH_URL,
     credentials: true,
 }))
 app.use(express.json())
@@ -1344,7 +1344,179 @@ async function run() {
             }
         });
 
-        // ✅ GET - Get all bookings for a tenant
+        // ✅ GET - All bookings (Tenant, Owner, or Admin)
+        app.get('/api/bookings', async (req, res) => {
+            try {
+                const {
+                    tenantId,
+                    page = 1,
+                    limit = 10,
+                    status,
+                    search,
+                    isAdmin,
+                    ownerId
+                } = req.query;
+
+                const skip = (parseInt(page) - 1) * parseInt(limit);
+                const limitNum = parseInt(limit);
+
+                // Build query
+                let query = {};
+
+                // ✅ Main Logic
+                if (isAdmin === 'true') {
+                    // Admin: সব booking দেখাবে
+                    if (status && status !== 'all' && status !== 'undefined') {
+                        query.bookingStatus = status;
+                    }
+                } else if (tenantId) {
+                    // Tenant: শুধু নিজের booking
+                    query.tenantId = tenantId;
+                    if (status && status !== 'all' && status !== 'undefined') {
+                        query.bookingStatus = status;
+                    }
+                } else if (ownerId) {
+                    // Owner: নিজের property এর booking
+                    query.ownerId = ownerId;
+                    if (status && status !== 'all' && status !== 'undefined') {
+                        query.bookingStatus = status;
+                    }
+                } else {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'tenantId, ownerId, or isAdmin is required'
+                    });
+                }
+
+                // Search filter
+                if (search) {
+                    query.$or = [
+                        { 'propertyInfo.title': { $regex: search, $options: 'i' } },
+                        { 'tenantInfo.name': { $regex: search, $options: 'i' } },
+                        { 'tenantInfo.email': { $regex: search, $options: 'i' } },
+                        { 'propertyInfo.location': { $regex: search, $options: 'i' } }
+                    ];
+                }
+
+                console.log('📊 Bookings Query:', JSON.stringify(query));
+
+                // Get bookings
+                const bookings = await bookingsCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .toArray();
+
+                // Count total
+                const totalCount = await bookingsCollection.countDocuments(query);
+
+                // Get property details for each booking (optional)
+                const bookingsWithDetails = await Promise.all(bookings.map(async (booking) => {
+                    try {
+                        const property = await propertiesCollection.findOne({
+                            _id: new ObjectId(booking.propertyId)
+                        });
+                        return {
+                            ...booking,
+                            propertyDetails: property || null
+                        };
+                    } catch (err) {
+                        return {
+                            ...booking,
+                            propertyDetails: null
+                        };
+                    }
+                }));
+
+                res.json({
+                    success: true,
+                    bookings: bookingsWithDetails,
+                    totalItems: totalCount,
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limitNum) || 1,
+                    itemsPerPage: limitNum
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching bookings:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch bookings',
+                    error: error.message
+                });
+            }
+        });
+
+        // ✅ GET - Get bookings for owner (legacy support)
+        app.get('/api/bookings/owner/:ownerId', async (req, res) => {
+            try {
+                const { ownerId } = req.params;
+                const { status, search, page = 1, limit = 10 } = req.query;
+
+                const query = { ownerId: ownerId };
+                if (status && status !== 'all' && status !== 'undefined') {
+                    query.bookingStatus = status;
+                }
+
+                if (search) {
+                    query.$or = [
+                        { 'propertyInfo.title': { $regex: search, $options: 'i' } },
+                        { 'tenantInfo.name': { $regex: search, $options: 'i' } },
+                        { 'propertyInfo.location': { $regex: search, $options: 'i' } }
+                    ];
+                }
+
+                const skip = (parseInt(page) - 1) * parseInt(limit);
+                const limitNum = parseInt(limit);
+                const totalCount = await bookingsCollection.countDocuments(query);
+
+                const bookings = await bookingsCollection
+                    .find(query)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .toArray();
+
+                const bookingsWithDetails = await Promise.all(bookings.map(async (booking) => {
+                    try {
+                        const property = await propertiesCollection.findOne({
+                            _id: new ObjectId(booking.propertyId)
+                        });
+                        return {
+                            ...booking,
+                            propertyDetails: property || null
+                        };
+                    } catch (err) {
+                        return {
+                            ...booking,
+                            propertyDetails: null
+                        };
+                    }
+                }));
+
+                res.json({
+                    success: true,
+                    bookings: bookingsWithDetails,
+                    count: bookingsWithDetails.length,
+                    pagination: {
+                        currentPage: parseInt(page),
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalItems: totalCount,
+                        itemsPerPage: parseInt(limit)
+                    }
+                });
+
+            } catch (error) {
+                console.error('Error fetching owner bookings:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch bookings'
+                });
+            }
+        });
+
+        // ✅ GET - Get all bookings for a tenant (legacy support)
         app.get('/api/bookings/my-bookings', async (req, res) => {
             try {
                 const { tenantId, page = 1, limit = 10, status, search } = req.query;
@@ -1408,73 +1580,6 @@ async function run() {
 
             } catch (error) {
                 console.error('Error fetching bookings:', error);
-                res.status(500).json({
-                    success: false,
-                    message: 'Failed to fetch bookings'
-                });
-            }
-        });
-
-        // ✅ GET - Get bookings for owner
-        app.get('/api/bookings/owner/:ownerId', async (req, res) => {
-            try {
-                const { ownerId } = req.params;
-                const { status, search, page = 1, limit = 10 } = req.query;
-
-                const query = { ownerId: ownerId };
-                if (status && status !== 'all' && status !== 'undefined') {
-                    query.bookingStatus = status;
-                }
-
-                if (search) {
-                    query.$or = [
-                        { 'propertyInfo.title': { $regex: search, $options: 'i' } },
-                        { 'tenantInfo.name': { $regex: search, $options: 'i' } },
-                        { 'propertyInfo.location': { $regex: search, $options: 'i' } }
-                    ];
-                }
-
-                const skip = (parseInt(page) - 1) * parseInt(limit);
-                const totalCount = await bookingsCollection.countDocuments(query);
-
-                const bookings = await bookingsCollection
-                    .find(query)
-                    .sort({ createdAt: -1 })
-                    .skip(skip)
-                    .limit(parseInt(limit))
-                    .toArray();
-
-                const bookingsWithDetails = await Promise.all(bookings.map(async (booking) => {
-                    try {
-                        const property = await propertiesCollection.findOne({
-                            _id: new ObjectId(booking.propertyId)
-                        });
-                        return {
-                            ...booking,
-                            propertyDetails: property || null
-                        };
-                    } catch (err) {
-                        return {
-                            ...booking,
-                            propertyDetails: null
-                        };
-                    }
-                }));
-
-                res.json({
-                    success: true,
-                    bookings: bookingsWithDetails,
-                    count: bookingsWithDetails.length,
-                    pagination: {
-                        currentPage: parseInt(page),
-                        totalPages: Math.ceil(totalCount / parseInt(limit)),
-                        totalItems: totalCount,
-                        itemsPerPage: parseInt(limit)
-                    }
-                });
-
-            } catch (error) {
-                console.error('Error fetching owner bookings:', error);
                 res.status(500).json({
                     success: false,
                     message: 'Failed to fetch bookings'
@@ -1626,8 +1731,8 @@ async function run() {
                         }
                     ],
                     mode: 'payment',
-                    success_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000'}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
-                    cancel_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000'}/payment/cancelled?bookingId=${bookingId}`,
+                    success_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
+                    cancel_url: `${process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/cancelled?bookingId=${bookingId}`,
                     metadata: {
                         propertyId: propertyId,
                         bookingId: bookingId,
@@ -1726,6 +1831,214 @@ async function run() {
                 res.status(500).json({
                     success: false,
                     message: 'Failed to fetch stats'
+                });
+            }
+        });
+
+        // ============================================================
+        // ==================== TRANSACTIONS APIS ======================
+        // ============================================================
+
+        // ✅ GET - All transactions (Admin only)
+        app.get('/api/admin/transactions', async (req, res) => {
+            try {
+                const { page = 1, limit = 10, status, search } = req.query;
+
+                const skip = (parseInt(page) - 1) * parseInt(limit);
+                const limitNum = parseInt(limit);
+
+                // Build query
+                let query = {};
+
+                // ✅ Status filter - 'all' হলে filter করবেন না
+                if (status && status !== 'all' && status !== 'undefined') {
+                    query.status = status;
+                }
+
+                // Search filter
+                if (search) {
+                    query.$or = [
+                        { 'propertyInfo.title': { $regex: search, $options: 'i' } },
+                        { 'tenantInfo.name': { $regex: search, $options: 'i' } },
+                        { 'tenantInfo.email': { $regex: search, $options: 'i' } },
+                        { '_id': { $regex: search, $options: 'i' } }
+                    ];
+                }
+
+                // Get transactions from bookings collection (where paymentStatus = 'paid')
+                const transactions = await bookingsCollection
+                    .find({
+                        ...query,
+                        paymentStatus: 'paid'
+                    })
+                    .sort({ paymentDate: -1, createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .toArray();
+
+                // Count total
+                const totalCount = await bookingsCollection.countDocuments({
+                    ...query,
+                    paymentStatus: 'paid'
+                });
+
+                // Format transactions
+                const formattedTransactions = transactions.map(booking => ({
+                    _id: booking._id,
+                    transactionId: booking._id,
+                    propertyInfo: booking.propertyInfo || {
+                        title: 'N/A',
+                        location: 'N/A',
+                        price: 0
+                    },
+                    tenantInfo: booking.tenantInfo || {
+                        name: 'Unknown',
+                        email: 'N/A',
+                        phone: 'N/A'
+                    },
+                    amount: booking.propertyInfo?.price || 0,
+                    status: booking.paymentStatus || 'paid',
+                    paymentType: 'booking',
+                    paymentMethod: 'stripe',
+                    paymentSessionId: booking.paymentSessionId || null,
+                    paymentDate: booking.paymentDate || booking.createdAt,
+                    createdAt: booking.createdAt,
+                    updatedAt: booking.updatedAt,
+                    additionalNotes: booking.additionalNotes || null,
+                    bookingStatus: booking.bookingStatus || 'pending'
+                }));
+
+                res.json({
+                    success: true,
+                    transactions: formattedTransactions,
+                    totalItems: totalCount,
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(totalCount / limitNum),
+                    itemsPerPage: limitNum
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching transactions:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch transactions',
+                    error: error.message
+                });
+            }
+        });
+
+        // ✅ GET - Single transaction details (Admin only)
+        app.get('/api/admin/transactions/:id', async (req, res) => {
+            try {
+                const { id } = req.params;
+
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid transaction ID'
+                    });
+                }
+
+                const booking = await bookingsCollection.findOne({
+                    _id: new ObjectId(id),
+                    paymentStatus: 'paid'
+                });
+
+                if (!booking) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Transaction not found'
+                    });
+                }
+
+                // Format transaction
+                const transaction = {
+                    _id: booking._id,
+                    transactionId: booking._id,
+                    propertyInfo: booking.propertyInfo || {
+                        title: 'N/A',
+                        location: 'N/A',
+                        price: 0
+                    },
+                    tenantInfo: booking.tenantInfo || {
+                        name: 'Unknown',
+                        email: 'N/A',
+                        phone: 'N/A'
+                    },
+                    amount: booking.propertyInfo?.price || 0,
+                    status: booking.paymentStatus || 'paid',
+                    paymentType: 'booking',
+                    paymentMethod: 'stripe',
+                    paymentSessionId: booking.paymentSessionId || null,
+                    paymentDate: booking.paymentDate || booking.createdAt,
+                    createdAt: booking.createdAt,
+                    updatedAt: booking.updatedAt,
+                    additionalNotes: booking.additionalNotes || null,
+                    bookingStatus: booking.bookingStatus || 'pending'
+                };
+
+                res.json({
+                    success: true,
+                    transaction: transaction
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching transaction:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch transaction',
+                    error: error.message
+                });
+            }
+        });
+
+        // ✅ GET - Transaction stats (Admin only)
+        app.get('/api/admin/transactions/stats', async (req, res) => {
+            try {
+                // Total transactions
+                const totalTransactions = await bookingsCollection.countDocuments({
+                    paymentStatus: 'paid'
+                });
+
+                // Total revenue
+                const revenueResult = await bookingsCollection.aggregate([
+                    { $match: { paymentStatus: 'paid' } },
+                    { $group: { _id: null, total: { $sum: '$propertyInfo.price' } } }
+                ]).toArray();
+                const totalRevenue = revenueResult[0]?.total || 0;
+
+                // Successful transactions (already paid)
+                const successful = await bookingsCollection.countDocuments({
+                    paymentStatus: 'paid'
+                });
+
+                // Pending transactions (bookings with pending payment)
+                const pending = await bookingsCollection.countDocuments({
+                    paymentStatus: 'pending'
+                });
+
+                // Failed transactions (if any)
+                const failed = await bookingsCollection.countDocuments({
+                    paymentStatus: 'failed'
+                });
+
+                res.json({
+                    success: true,
+                    stats: {
+                        totalTransactions,
+                        totalRevenue,
+                        successful,
+                        pending,
+                        failed
+                    }
+                });
+
+            } catch (error) {
+                console.error('❌ Error fetching transaction stats:', error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to fetch transaction stats',
+                    error: error.message
                 });
             }
         });
