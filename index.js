@@ -7,7 +7,7 @@ require('dotenv').config()
 
 // ✅ CORS - উন্নত
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001'],
+    origin: process.env.BETTER_AUTH_URL,
     credentials: true,
 }))
 app.use(express.json())
