@@ -1,4 +1,4 @@
-// server/index.js (Production Ready)
+// server/index.js (Production Ready - Local + Vercel)
 const express = require('express');
 const app = express();
 const cors = require('cors');
@@ -12,6 +12,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 app.use(cors({
     origin: [
         'http://localhost:3000',
+        'http://localhost:5000',
         'https://rentnest-client.vercel.app',
         'https://rent-nest-client.vercel.app',
         process.env.FRONTEND_URL,
@@ -23,7 +24,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ✅ Health Check - Production
+// ✅ Health Check
 app.get('/', (req, res) => {
     res.json({
         success: true,
@@ -33,7 +34,6 @@ app.get('/', (req, res) => {
     });
 });
 
-// ✅ API Health Check
 app.get('/api/health', (req, res) => {
     res.json({
         success: true,
@@ -62,7 +62,7 @@ let favoritesCollection;
 let bookingsCollection;
 let reviewsCollection;
 
-// ✅ Database Connection - Production Ready
+// ✅ Database Connection
 async function connectDB() {
     try {
         if (client && db) {
@@ -86,14 +86,13 @@ async function connectDB() {
     }
 }
 
-// ✅ Connect on startup
+// Connect on startup
 connectDB().catch(console.error);
 
 // ============================================================
 // ==================== USER APIS ==============================
 // ============================================================
 
-// ✅ GET all users
 app.get('/api/user', async (req, res) => {
     try {
         await connectDB();
@@ -105,7 +104,6 @@ app.get('/api/user', async (req, res) => {
     }
 });
 
-// ✅ GET single user by ID
 app.get('/api/user/:id', async (req, res) => {
     try {
         await connectDB();
@@ -124,7 +122,6 @@ app.get('/api/user/:id', async (req, res) => {
     }
 });
 
-// ✅ POST - Create user
 app.post('/api/user', async (req, res) => {
     try {
         await connectDB();
@@ -141,7 +138,6 @@ app.post('/api/user', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Update user role
 app.patch('/api/user/:id', async (req, res) => {
     try {
         await connectDB();
@@ -169,7 +165,6 @@ app.patch('/api/user/:id', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Update user profile
 app.patch('/api/user/profile/:id', async (req, res) => {
     try {
         await connectDB();
@@ -195,7 +190,6 @@ app.patch('/api/user/profile/:id', async (req, res) => {
     }
 });
 
-// ✅ DELETE - Delete user
 app.delete('/api/user/:id', async (req, res) => {
     try {
         await connectDB();
@@ -218,7 +212,6 @@ app.delete('/api/user/:id', async (req, res) => {
 // ==================== PROPERTIES APIS ========================
 // ============================================================
 
-// ✅ POST - Create property
 app.post('/api/properties', async (req, res) => {
     try {
         await connectDB();
@@ -238,7 +231,6 @@ app.post('/api/properties', async (req, res) => {
     }
 });
 
-// ✅ GET - All properties with full filtering, search, and sorting
 app.get('/api/properties', async (req, res) => {
     try {
         await connectDB();
@@ -257,7 +249,7 @@ app.get('/api/properties', async (req, res) => {
             isOwner,
             ownerId,
             page = 1,
-            limit = 20
+            limit = 50  // ✅ 20 → 50 করে দিলাম
         } = req.query;
 
         let query = {};
@@ -391,7 +383,132 @@ app.get('/api/properties', async (req, res) => {
     }
 });
 
-// ✅ GET - Property types with counts
+// ✅ GET - All properties (No pagination limit) - Admin/Owner এর জন্য
+app.get('/api/properties/all', async (req, res) => {
+    try {
+        await connectDB();
+        const {
+            search,
+            location,
+            propertyType,
+            minPrice,
+            maxPrice,
+            bedrooms,
+            bathrooms,
+            sortBy,
+            sortOrder,
+            status,
+            isAdmin,
+            isOwner,
+            ownerId
+        } = req.query;
+
+        let query = {};
+
+        if (isAdmin === 'true') {
+            if (status && status !== 'all') {
+                query.status = status;
+            }
+        } else if (isOwner === 'true' && ownerId) {
+            query.$or = [{ 'ownerId': ownerId }, { 'owner.id': ownerId }];
+            if (status && status !== 'all') {
+                query.status = status;
+            }
+        } else {
+            query.status = 'approved';
+        }
+
+        if (search) {
+            const searchRegex = { $regex: search, $options: 'i' };
+            query.$or = query.$or || [];
+            query.$or.push(
+                { title: searchRegex },
+                { description: searchRegex },
+                { location: searchRegex },
+                { 'address.city': searchRegex },
+                { 'address.state': searchRegex },
+                { 'address.zipCode': searchRegex },
+                { 'address.fullAddress': searchRegex }
+            );
+        }
+
+        if (location) {
+            const locationRegex = { $regex: location, $options: 'i' };
+            if (query.$or) {
+                query.$or.push(
+                    { location: locationRegex },
+                    { 'address.city': locationRegex },
+                    { 'address.state': locationRegex },
+                    { 'address.zipCode': locationRegex },
+                    { 'address.fullAddress': locationRegex }
+                );
+            } else {
+                query.$or = [
+                    { location: locationRegex },
+                    { 'address.city': locationRegex },
+                    { 'address.state': locationRegex },
+                    { 'address.zipCode': locationRegex },
+                    { 'address.fullAddress': locationRegex }
+                ];
+            }
+        }
+
+        if (propertyType) {
+            query.propertyType = { $regex: `^${propertyType}$`, $options: 'i' };
+        }
+
+        if (minPrice || maxPrice) {
+            query.price = {};
+            if (minPrice) query.price.$gte = parseFloat(minPrice);
+            if (maxPrice) query.price.$lte = parseFloat(maxPrice);
+        }
+
+        if (bedrooms) {
+            query['specifications.bedrooms'] = { $gte: parseInt(bedrooms) };
+        }
+
+        if (bathrooms) {
+            query['specifications.bathrooms'] = { $gte: parseInt(bathrooms) };
+        }
+
+        let sort = {};
+        const sortField = sortBy || 'createdAt';
+        const sortDirection = sortOrder === 'asc' ? 1 : -1;
+
+        switch (sortField) {
+            case 'price':
+                sort.price = 1;
+                break;
+            case 'priceDesc':
+                sort.price = -1;
+                break;
+            case 'title':
+                sort.title = 1;
+                break;
+            case 'bedrooms':
+                sort['specifications.bedrooms'] = -1;
+                break;
+            default:
+                sort.createdAt = sortDirection;
+                break;
+        }
+
+        const properties = await propertiesCollection
+            .find(query)
+            .sort(sort)
+            .toArray();
+
+        res.json({
+            success: true,
+            properties,
+            count: properties.length
+        });
+    } catch (error) {
+        console.error('Error fetching all properties:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch properties', error: error.message });
+    }
+});
+
 app.get('/api/properties/types', async (req, res) => {
     try {
         await connectDB();
@@ -410,7 +527,6 @@ app.get('/api/properties/types', async (req, res) => {
     }
 });
 
-// ✅ GET - Locations with counts
 app.get('/api/properties/locations', async (req, res) => {
     try {
         await connectDB();
@@ -430,7 +546,6 @@ app.get('/api/properties/locations', async (req, res) => {
     }
 });
 
-// ✅ GET - Price range stats
 app.get('/api/properties/price-stats', async (req, res) => {
     try {
         await connectDB();
@@ -453,7 +568,6 @@ app.get('/api/properties/price-stats', async (req, res) => {
     }
 });
 
-// ✅ GET - Search suggestions
 app.get('/api/properties/suggestions', async (req, res) => {
     try {
         await connectDB();
@@ -477,7 +591,6 @@ app.get('/api/properties/suggestions', async (req, res) => {
     }
 });
 
-// ✅ GET - Featured properties
 app.get('/api/properties/featured', async (req, res) => {
     try {
         await connectDB();
@@ -493,7 +606,6 @@ app.get('/api/properties/featured', async (req, res) => {
     }
 });
 
-// ✅ GET - User properties (by ownerId)
 app.get("/api/properties/user/:id", async (req, res) => {
     try {
         await connectDB();
@@ -509,7 +621,6 @@ app.get("/api/properties/user/:id", async (req, res) => {
     }
 });
 
-// ✅ GET - Single property
 app.get('/api/properties/:id', async (req, res) => {
     try {
         await connectDB();
@@ -528,7 +639,6 @@ app.get('/api/properties/:id', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Approve property
 app.patch('/api/properties/:id/approve', async (req, res) => {
     try {
         await connectDB();
@@ -551,7 +661,6 @@ app.patch('/api/properties/:id/approve', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Reject property
 app.patch('/api/properties/:id/reject', async (req, res) => {
     try {
         await connectDB();
@@ -575,7 +684,6 @@ app.patch('/api/properties/:id/reject', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Update property
 app.patch('/api/properties/:id', async (req, res) => {
     try {
         await connectDB();
@@ -601,7 +709,6 @@ app.patch('/api/properties/:id', async (req, res) => {
     }
 });
 
-// ✅ DELETE - Delete property
 app.delete('/api/properties/:id', async (req, res) => {
     try {
         await connectDB();
@@ -624,7 +731,6 @@ app.delete('/api/properties/:id', async (req, res) => {
 // ==================== FAVORITES APIS =========================
 // ============================================================
 
-// ✅ POST - Add property to favorites
 app.post('/api/favorites', async (req, res) => {
     try {
         await connectDB();
@@ -645,7 +751,6 @@ app.post('/api/favorites', async (req, res) => {
     }
 });
 
-// ✅ DELETE - Remove property from favorites
 app.delete('/api/favorites/:propertyId', async (req, res) => {
     try {
         await connectDB();
@@ -665,7 +770,6 @@ app.delete('/api/favorites/:propertyId', async (req, res) => {
     }
 });
 
-// ✅ GET - Check if property is favorited
 app.get('/api/favorites/check/:propertyId', async (req, res) => {
     try {
         await connectDB();
@@ -682,7 +786,6 @@ app.get('/api/favorites/check/:propertyId', async (req, res) => {
     }
 });
 
-// ✅ GET - Get all favorites for a specific tenant
 app.get('/api/favorites/my-favorites', async (req, res) => {
     try {
         await connectDB();
@@ -722,7 +825,6 @@ app.get('/api/favorites/my-favorites', async (req, res) => {
     }
 });
 
-// ✅ GET - Get all favorites with full property details (no pagination)
 app.get('/api/favorites/all/:tenantId', async (req, res) => {
     try {
         await connectDB();
@@ -746,7 +848,6 @@ app.get('/api/favorites/all/:tenantId', async (req, res) => {
     }
 });
 
-// ✅ GET - Get favorite count for a property
 app.get('/api/favorites/count/:propertyId', async (req, res) => {
     try {
         await connectDB();
@@ -763,7 +864,6 @@ app.get('/api/favorites/count/:propertyId', async (req, res) => {
 // ==================== BOOKINGS APIS ==========================
 // ============================================================
 
-// ✅ POST - Create new booking
 app.post('/api/bookings', async (req, res) => {
     try {
         await connectDB();
@@ -833,7 +933,6 @@ app.post('/api/bookings', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Update payment status ONLY (NO booking status change)
 app.patch('/api/bookings/:id/payment', async (req, res) => {
     try {
         await connectDB();
@@ -865,7 +964,6 @@ app.patch('/api/bookings/:id/payment', async (req, res) => {
     }
 });
 
-// ✅ PATCH - Update booking status (Approve/Reject)
 app.patch('/api/bookings/:id/status', async (req, res) => {
     try {
         await connectDB();
@@ -902,7 +1000,6 @@ app.patch('/api/bookings/:id/status', async (req, res) => {
     }
 });
 
-// ✅ GET - All bookings (Tenant, Owner, or Admin)
 app.get('/api/bookings', async (req, res) => {
     try {
         await connectDB();
@@ -982,7 +1079,6 @@ app.get('/api/bookings', async (req, res) => {
     }
 });
 
-// ✅ GET - Get bookings for owner (legacy support)
 app.get('/api/bookings/owner/:ownerId', async (req, res) => {
     try {
         await connectDB();
@@ -1041,7 +1137,6 @@ app.get('/api/bookings/owner/:ownerId', async (req, res) => {
     }
 });
 
-// ✅ GET - Get all bookings for a tenant (legacy support)
 app.get('/api/bookings/my-bookings', async (req, res) => {
     try {
         await connectDB();
@@ -1095,7 +1190,6 @@ app.get('/api/bookings/my-bookings', async (req, res) => {
     }
 });
 
-// ✅ GET - Single booking details
 app.get('/api/bookings/:id', async (req, res) => {
     try {
         await connectDB();
@@ -1122,7 +1216,6 @@ app.get('/api/bookings/:id', async (req, res) => {
     }
 });
 
-// ✅ DELETE - Cancel booking (soft delete)
 app.delete('/api/bookings/:id', async (req, res) => {
     try {
         await connectDB();
@@ -1153,7 +1246,6 @@ app.delete('/api/bookings/:id', async (req, res) => {
 // ==================== REVIEWS APIS ===========================
 // ============================================================
 
-// ✅ POST - Create a review
 app.post('/api/reviews', async (req, res) => {
     try {
         await connectDB();
@@ -1205,7 +1297,6 @@ app.post('/api/reviews', async (req, res) => {
     }
 });
 
-// ✅ GET - All reviews for a property
 app.get('/api/reviews/:propertyId', async (req, res) => {
     try {
         await connectDB();
@@ -1235,7 +1326,6 @@ app.get('/api/reviews/:propertyId', async (req, res) => {
     }
 });
 
-// ✅ GET - All reviews (for Home Page)
 app.get('/api/reviews', async (req, res) => {
     try {
         await connectDB();
@@ -1254,7 +1344,6 @@ app.get('/api/reviews', async (req, res) => {
     }
 });
 
-// ✅ GET - Check if user can review
 app.get('/api/reviews/check/:propertyId/:tenantId', async (req, res) => {
     try {
         await connectDB();
@@ -1292,7 +1381,6 @@ app.get('/api/reviews/check/:propertyId/:tenantId', async (req, res) => {
 // ==================== STRIPE CHECKOUT SESSION ================
 // ============================================================
 
-// ✅ POST - Create Stripe Checkout Session
 app.post('/api/create-checkout-session', async (req, res) => {
     try {
         const { propertyId, propertyTitle, propertyPrice, bookingId } = req.body;
@@ -1316,8 +1404,8 @@ app.post('/api/create-checkout-session', async (req, res) => {
                 quantity: 1
             }],
             mode: 'payment',
-            success_url: `${process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
-            cancel_url: `${process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL}/payment/cancelled?bookingId=${bookingId}`,
+            success_url: `${process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000'}/payment/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${bookingId}`,
+            cancel_url: `${process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || 'http://localhost:3000'}/payment/cancelled?bookingId=${bookingId}`,
             metadata: { propertyId, bookingId, amount: String(propertyPrice) }
         });
 
@@ -1332,7 +1420,6 @@ app.post('/api/create-checkout-session', async (req, res) => {
 // ==================== DASHBOARD STATS ========================
 // ============================================================
 
-// ✅ GET - Admin dashboard stats (Updated - Revenue included)
 app.get('/api/admin/stats', async (req, res) => {
     try {
         await connectDB();
@@ -1392,7 +1479,6 @@ app.get('/api/admin/stats', async (req, res) => {
     }
 });
 
-// ✅ GET - Owner dashboard stats with monthly earnings
 app.get('/api/owner/stats/:ownerId', async (req, res) => {
     try {
         await connectDB();
@@ -1474,7 +1560,6 @@ async function getMonthlyEarnings(ownerId) {
 // ==================== TRANSACTIONS APIS ======================
 // ============================================================
 
-// ✅ GET - All transactions (Admin only)
 app.get('/api/admin/transactions', async (req, res) => {
     try {
         await connectDB();
@@ -1558,7 +1643,6 @@ app.get('/api/admin/transactions', async (req, res) => {
     }
 });
 
-// ✅ GET - Single transaction details (Admin only)
 app.get('/api/admin/transactions/:id', async (req, res) => {
     try {
         await connectDB();
@@ -1616,7 +1700,6 @@ app.get('/api/admin/transactions/:id', async (req, res) => {
     }
 });
 
-// ✅ GET - Transaction stats (Admin only)
 app.get('/api/admin/transactions/stats', async (req, res) => {
     try {
         await connectDB();
