@@ -10,7 +10,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // ✅ CORS
 app.use(cors({
-    origin: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+    origin: process.env.BETTER_AUTH_URL,
     credentials: true,
 }))
 app.use(express.json())
