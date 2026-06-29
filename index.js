@@ -5,10 +5,8 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 
-// ✅ Stripe
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-// ✅ CORS - Production Ready
 app.use(cors({
     origin: [
         'http://localhost:3000',
@@ -22,13 +20,13 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
 
-// ✅ Health Check
 app.get('/', (req, res) => {
     res.json({
         success: true,
-        message: '🚀 RentNest API is running!',
+        message: 'RentNest API is running!',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development'
     });
@@ -62,11 +60,10 @@ let favoritesCollection;
 let bookingsCollection;
 let reviewsCollection;
 
-// ✅ Database Connection
 async function connectDB() {
     try {
         if (client && db) {
-            console.log('✅ Using existing database connection');
+            console.log('Using existing database connection');
             return;
         }
 
@@ -79,14 +76,13 @@ async function connectDB() {
         reviewsCollection = db.collection('reviews');
 
         await client.db("admin").command({ ping: 1 });
-        console.log('✅ MongoDB connected successfully!');
+        console.log('MongoDB connected successfully!');
     } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
+        console.error('MongoDB connection error:', error);
         throw error;
     }
 }
 
-// Connect on startup
 connectDB().catch(console.error);
 
 // ============================================================
@@ -96,8 +92,36 @@ connectDB().catch(console.error);
 app.get('/api/user', async (req, res) => {
     try {
         await connectDB();
-        const user = await usersCollection.find().toArray();
-        res.json({ success: true, user });
+        const { page = 1, limit = 10, search } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        let query = {};
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const totalCount = await usersCollection.countDocuments(query);
+        const user = await usersCollection
+            .find(query)
+            .skip(skip)
+            .limit(limitNum)
+            .toArray();
+
+        res.json({
+            success: true,
+            user,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limitNum),
+                totalItems: totalCount,
+                itemsPerPage: limitNum
+            }
+        });
     } catch (error) {
         console.error('Error fetching users:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch users' });
@@ -170,20 +194,47 @@ app.patch('/api/user/profile/:id', async (req, res) => {
         await connectDB();
         const { id } = req.params;
         const updateData = req.body;
+
         if (!ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid user ID' });
         }
+
+        // Remove fields that should not be updated
         delete updateData._id;
         delete updateData.password;
+        delete updateData.createdAt;
+        delete updateData.updatedAt;
+        delete updateData.email;
+        delete updateData.role;
+        delete updateData.emailVerified;
+        delete updateData.__v;
+
+        // Only update if there is data to update
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ success: false, message: 'No valid fields to update' });
+        }
+
+        // Add updatedAt timestamp
+        updateData.updatedAt = new Date();
+
+        console.log('Updating user profile:', { id, updateData });
+
         const result = await usersCollection.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { ...updateData, updatedAt: new Date() } }
+            { $set: updateData }
         );
+
         if (result.matchedCount === 0) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+
         const updatedUser = await usersCollection.findOne({ _id: new ObjectId(id) });
-        res.json({ success: true, message: 'Profile updated successfully', user: updatedUser });
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            user: updatedUser
+        });
     } catch (error) {
         console.error('Error updating profile:', error);
         res.status(500).json({ success: false, message: 'Failed to update profile' });
@@ -249,7 +300,7 @@ app.get('/api/properties', async (req, res) => {
             isOwner,
             ownerId,
             page = 1,
-            limit = 50  // ✅ 20 → 50 করে দিলাম
+            limit = 20
         } = req.query;
 
         let query = {};
@@ -378,12 +429,11 @@ app.get('/api/properties', async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching properties:', error);
+        console.error('Error fetching properties:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch properties', error: error.message });
     }
 });
 
-// ✅ GET - All properties (No pagination limit) - Admin/Owner এর জন্য
 app.get('/api/properties/all', async (req, res) => {
     try {
         await connectDB();
@@ -512,14 +562,34 @@ app.get('/api/properties/all', async (req, res) => {
 app.get('/api/properties/types', async (req, res) => {
     try {
         await connectDB();
-        const types = await propertiesCollection.aggregate([
+        const { page = 1, limit = 20 } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        const pipeline = [
             { $match: { status: 'approved' } },
             { $group: { _id: '$propertyType', count: { $sum: 1 } } },
-            { $sort: { _id: 1 } }
+            { $sort: { _id: 1 } },
+            { $skip: skip },
+            { $limit: limitNum }
+        ];
+
+        const types = await propertiesCollection.aggregate(pipeline).toArray();
+        const totalCount = await propertiesCollection.aggregate([
+            { $match: { status: 'approved' } },
+            { $group: { _id: '$propertyType', count: { $sum: 1 } } }
         ]).toArray();
+
         res.json({
             success: true,
-            types: types.map(t => ({ type: t._id || 'Unknown', count: t.count }))
+            types: types.map(t => ({ type: t._id || 'Unknown', count: t.count })),
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount.length / limitNum),
+                totalItems: totalCount.length,
+                itemsPerPage: limitNum
+            }
         });
     } catch (error) {
         console.error('Error fetching property types:', error);
@@ -530,15 +600,34 @@ app.get('/api/properties/types', async (req, res) => {
 app.get('/api/properties/locations', async (req, res) => {
     try {
         await connectDB();
-        const locations = await propertiesCollection.aggregate([
+        const { page = 1, limit = 20 } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        const pipeline = [
             { $match: { status: 'approved' } },
             { $group: { _id: '$location', count: { $sum: 1 } } },
             { $sort: { count: -1 } },
-            { $limit: 20 }
+            { $skip: skip },
+            { $limit: limitNum }
+        ];
+
+        const locations = await propertiesCollection.aggregate(pipeline).toArray();
+        const totalCount = await propertiesCollection.aggregate([
+            { $match: { status: 'approved' } },
+            { $group: { _id: '$location', count: { $sum: 1 } } }
         ]).toArray();
+
         res.json({
             success: true,
-            locations: locations.map(l => ({ location: l._id || 'Unknown', count: l.count }))
+            locations: locations.map(l => ({ location: l._id || 'Unknown', count: l.count })),
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount.length / limitNum),
+                totalItems: totalCount.length,
+                itemsPerPage: limitNum
+            }
         });
     } catch (error) {
         console.error('Error fetching locations:', error);
@@ -610,11 +699,35 @@ app.get("/api/properties/user/:id", async (req, res) => {
     try {
         await connectDB();
         const userId = req.params.id;
+        const { page = 1, limit = 10, status } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        let query = { $or: [{ 'ownerId': userId }, { 'owner.id': userId }] };
+        if (status && status !== 'all') {
+            query.status = status;
+        }
+
+        const totalCount = await propertiesCollection.countDocuments(query);
         const properties = await propertiesCollection
-            .find({ $or: [{ 'ownerId': userId }, { 'owner.id': userId }] })
+            .find(query)
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
             .toArray();
-        res.json({ success: true, properties, count: properties.length });
+
+        res.json({
+            success: true,
+            properties,
+            count: properties.length,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limitNum),
+                totalItems: totalCount,
+                itemsPerPage: limitNum
+            }
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: "Failed to fetch user properties" });
@@ -829,19 +942,40 @@ app.get('/api/favorites/all/:tenantId', async (req, res) => {
     try {
         await connectDB();
         const { tenantId } = req.params;
+        const { page = 1, limit = 20 } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        const totalCount = await favoritesCollection.countDocuments({ tenantId });
         const favorites = await favoritesCollection
             .find({ tenantId })
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum)
             .toArray();
+
         const propertyIds = favorites.map(fav => fav.propertyId);
         const properties = await propertiesCollection
             .find({ _id: { $in: propertyIds.map(id => new ObjectId(id)) } })
             .toArray();
+
         const favoriteProperties = favorites.map(fav => {
             const property = properties.find(p => p._id.toString() === fav.propertyId);
             return { ...fav, propertyDetails: property || null };
         });
-        res.json({ success: true, favorites: favoriteProperties, count: favoriteProperties.length });
+
+        res.json({
+            success: true,
+            favorites: favoriteProperties,
+            count: favoriteProperties.length,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limitNum),
+                totalItems: totalCount,
+                itemsPerPage: limitNum
+            }
+        });
     } catch (error) {
         console.error('Error fetching all favorites:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch favorites' });
@@ -1301,24 +1435,34 @@ app.get('/api/reviews/:propertyId', async (req, res) => {
     try {
         await connectDB();
         const { propertyId } = req.params;
-        const { limit = 10 } = req.query;
+        const { page = 1, limit = 10 } = req.query;
 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        const totalCount = await reviewsCollection.countDocuments({ propertyId });
         const reviews = await reviewsCollection
             .find({ propertyId })
             .sort({ createdAt: -1 })
-            .limit(parseInt(limit))
+            .skip(skip)
+            .limit(limitNum)
             .toArray();
 
-        const totalReviews = reviews.length;
-        const averageRating = totalReviews > 0
-            ? reviews.reduce((sum, r) => sum + r.rating, 0) / totalReviews
+        const averageRating = totalCount > 0
+            ? reviews.reduce((sum, r) => sum + r.rating, 0) / totalCount
             : 0;
 
         res.json({
             success: true,
             reviews,
-            totalReviews,
-            averageRating: averageRating.toFixed(1)
+            totalReviews: totalCount,
+            averageRating: averageRating.toFixed(1),
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limitNum),
+                totalItems: totalCount,
+                itemsPerPage: limitNum
+            }
         });
     } catch (error) {
         console.error('Error fetching reviews:', error);
@@ -1329,15 +1473,35 @@ app.get('/api/reviews/:propertyId', async (req, res) => {
 app.get('/api/reviews', async (req, res) => {
     try {
         await connectDB();
-        const { limit = 4 } = req.query;
+        const { page = 1, limit = 10, propertyId } = req.query;
 
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitNum = parseInt(limit);
+
+        let query = {};
+        if (propertyId) {
+            query.propertyId = propertyId;
+        }
+
+        const totalCount = await reviewsCollection.countDocuments(query);
         const reviews = await reviewsCollection
-            .find({})
+            .find(query)
             .sort({ createdAt: -1 })
-            .limit(parseInt(limit))
+            .skip(skip)
+            .limit(limitNum)
             .toArray();
 
-        res.json({ success: true, reviews, count: reviews.length });
+        res.json({
+            success: true,
+            reviews,
+            count: reviews.length,
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages: Math.ceil(totalCount / limitNum),
+                totalItems: totalCount,
+                itemsPerPage: limitNum
+            }
+        });
     } catch (error) {
         console.error('Error fetching all reviews:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch reviews', error: error.message });
@@ -1519,7 +1683,6 @@ app.get('/api/owner/stats/:ownerId', async (req, res) => {
     }
 });
 
-// ✅ Helper function - Get monthly earnings
 async function getMonthlyEarnings(ownerId) {
     const months = [];
     const now = new Date();
@@ -1731,22 +1894,16 @@ app.get('/api/admin/transactions/stats', async (req, res) => {
     }
 });
 
-// ============================================================
-// ==================== VERCEL EXPORT ===========================
-// ============================================================
-
-// ✅ For Vercel Serverless
 module.exports = app;
 
-// ✅ For Local Development
 if (require.main === module) {
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, async () => {
-        console.log(`🚀 Server running on port ${PORT}`);
+        console.log(`Server running on port ${PORT}`);
         try {
             await connectDB();
         } catch (error) {
-            console.error('❌ Failed to connect to MongoDB:', error);
+            console.error('Failed to connect to MongoDB:', error);
         }
     });
 }
